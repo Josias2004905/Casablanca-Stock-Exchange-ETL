@@ -1,0 +1,33 @@
+-- ============================================================
+--  Schéma initial — ETL Bourse de Casablanca
+-- ============================================================
+
+-- Table principale : cours journaliers
+CREATE TABLE IF NOT EXISTS stock_prices (
+    id           SERIAL PRIMARY KEY,
+    ticker       VARCHAR(20)    NOT NULL,   -- Ex: ATW, BCP, IAM
+    date         DATE           NOT NULL,
+    open         NUMERIC(12,4),
+    high         NUMERIC(12,4),
+    low          NUMERIC(12,4),
+    close        NUMERIC(12,4)  NOT NULL,
+    volume       BIGINT,
+    daily_return NUMERIC(8,6),             -- (close_t - close_t-1) / close_t-1
+    scraped_at   TIMESTAMP DEFAULT NOW(),
+    UNIQUE(ticker, date)                   -- Pas de doublons
+);
+
+-- Table des indices (MASI, MADEX)
+CREATE TABLE IF NOT EXISTS market_indices (
+    id         SERIAL PRIMARY KEY,
+    index_name VARCHAR(20) NOT NULL,       -- Ex: MASI, MADEX
+    date       DATE        NOT NULL,
+    value      NUMERIC(12,4) NOT NULL,
+    variation  NUMERIC(8,4),              -- Variation en %
+    scraped_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(index_name, date)
+);
+
+-- Index pour accélérer les requêtes
+CREATE INDEX IF NOT EXISTS idx_stock_ticker_date ON stock_prices(ticker, date);
+CREATE INDEX IF NOT EXISTS idx_index_date ON market_indices(index_name, date);

@@ -1,0 +1,101 @@
+version: "3.8"
+
+# ============================================================
+#  ETL Bourse de Casablanca — Docker Compose
+# ============================================================
+
+x-airflow-common: &airflow-common
+  build: .
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    # Connexion PostgreSQL pour les scripts ETL
+    DB_HOST: postgres
+    DB_PORT: 5432
+    DB_NAME: ${POSTGRES_DB}
+    DB_USER: ${POSTGRES_USER}
+    DB_PASSWORD: ${POSTGRES_PASSWORD}
+  volumes:
+    - ./dags:/opt/airflow/dags          # Tes DAGs Airflow
+    - ./scripts:/opt/airflow/scripts    # Tes scripts ETL
+    - ./logs:/opt/airflow/logs          # Logs Airflow
+    - ./plugins:/opt/airflow/plugins    # Plugins optionnels
+  depends_on:
+    postgres:
+      condition: service_healthy        # Attend que PostgreSQL soit prêt
+
+services:
+
+  # ─────────────────────────────────────────
+  #  1. BASE DE DONNÉES PostgreSQL
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: bvc_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"                     # Accessible depuis ta machine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # Données persistantes
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql  # Schéma initial
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  #  2. AIRFLOW — Initialisation (one-shot)
+  # ─────────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: bvc_airflow_init
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create
+          --username ${AIRFLOW_USER}
+          --password ${AIRFLOW_PASSWORD}
+          --firstname Admin
+          --lastname BVC
+          --role Admin
+          --email admin@bvc-etl.ma
+      "
+    restart: "no"                       # Ne tourne qu'une seule fois
+
+  # ─────────────────────────────────────────
+  #  3. AIRFLOW — Interface Web (port 8080)
+  # ─────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: bvc_airflow_webserver
+    command: airflow webserver
+    ports:
+      - "8080:8080"                     # Accès : http://localhost:8080
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────
+  #  4. AIRFLOW — Scheduler (moteur ETL)
+  # ─────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: bvc_airflow_scheduler
+    command: airflow scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+# ─────────────────────────────────────────
+#  VOLUMES — Persistance des données
+# ─────────────────────────────────────────
+volumes:
+  postgres_data:                        # Les données PostgreSQL survivent aux redémarrages
